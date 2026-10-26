@@ -82,6 +82,27 @@ h1 { font-family: var(--font-display); font-weight: 600; font-size: 30px; line-h
   font-family: var(--font-display); font-size: 22px; color: var(--accent); border: 2px dashed var(--accent); border-radius: 6px;
 }
 
+.stage-col { display: grid; gap: 8px; min-width: 0; }
+.timeline {
+  display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px 12px;
+}
+.timeline .play {
+  font: inherit; font-weight: 600; font-size: 13px; min-width: 64px; padding: 6px 10px; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
+}
+.timeline .play:disabled, .timeline select:disabled { opacity: 0.45; cursor: not-allowed; }
+.timeline select { width: auto; padding: 5px 6px; font-family: var(--font-mono); font-size: 12.5px; }
+.scrub { position: relative; flex: 1; min-width: 0; display: grid; }
+.scrub input { margin: 0; }
+.ticks { position: relative; height: 6px; margin: 2px 8px 0; }
+.ticks i { position: absolute; top: 0; width: 1px; height: 6px; background: var(--line); }
+.frame-out { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 520px) { .timeline { flex-wrap: wrap; } .scrub { flex-basis: 100%; order: 3; } }
+.howto { font-size: 13px; color: var(--muted); }
+.howto summary { cursor: pointer; color: var(--ink); font-weight: 500; }
+.howto p { margin: 6px 0 0; }
+.howto b { color: var(--ink); font-weight: 600; }
 .rail { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; display: grid; gap: 18px; }
 .group { display: grid; gap: 10px; }
 .group-title { font-family: var(--font-display); font-weight: 500; font-size: 15px; letter-spacing: 0.6px; margin: 0; color: var(--ink); }
@@ -152,20 +173,41 @@ label.upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
   </header>
 
   <div class="bench">
-    <div class="stage" id="stage" aria-label="Model preview. Drag to turn the model.">
-      <canvas id="stageCanvas"></canvas>
-      <div class="readout" id="readout">0° · tilt 0°</div>
-      <div class="hint">Drag to turn · drop a .json here to load it</div>
-      <div class="drop-veil" id="dropVeil" hidden>Drop the .json to load it</div>
+    <div class="stage-col">
+      <div class="stage" id="stage" aria-label="Model preview. Drag to turn the model.">
+        <canvas id="stageCanvas"></canvas>
+        <div class="readout" id="readout">0° · tilt 0°</div>
+        <div class="hint">Drag to turn · drop .json files here to load them</div>
+        <div class="drop-veil" id="dropVeil" hidden>Drop the .json files to load them</div>
+      </div>
+      <div class="timeline" id="timeline">
+        <button class="play" id="play" type="button" disabled>Play</button>
+        <div class="scrub">
+          <input type="range" id="frame" min="0" max="0" step="1" value="0" disabled aria-label="Animation frame">
+          <div class="ticks" id="tickMarks" aria-hidden="true"></div>
+        </div>
+        <output class="frame-out" id="frameOut" for="frame" title="Comma and full stop step one frame">frame 1 / 1</output>
+        <select id="speed" aria-label="Playback speed" disabled>
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+        </select>
+      </div>
+      <p class="msg" id="animMsg">No animation in this file. Load an export that has animation frames, or load several single-frame exports at once.</p>
     </div>
 
     <aside class="rail">
       <div class="group">
         <h2 class="group-title">Model</h2>
-        <label class="upload btn secondary" for="fileInput">Load a .json export
-          <input type="file" id="fileInput" accept=".json,application/json">
+        <label class="upload btn secondary" for="fileInput">Load .json export(s)
+          <input type="file" id="fileInput" accept=".json,application/json" multiple>
         </label>
         <p class="msg" id="loadMsg">Export from Creator's Kit (3D Models, Local Player) and load the file here.</p>
+        <details class="howto">
+          <summary>Exporting animation frames</summary>
+          <p>On the object in Creator's Kit, set <b>Anim ID</b> to the animation and <b>Frame</b> to 0, then Export 3D. Change Frame to 1, 2, 3 and export each one.</p>
+          <p>Select all those files at once here. They're sorted by file name, so name them in order (guardian_00, guardian_01…).</p>
+        </details>
       </div>
 
       <div class="group">
@@ -213,6 +255,7 @@ label.upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
         </div>
         <button class="btn" id="saveOne" type="button">Save this angle (.png)</button>
         <button class="btn secondary" id="saveAll" type="button">Save ticked angles (.zip)</button>
+        <button class="btn secondary" id="saveFrames" type="button" hidden>Save every frame at this angle (.zip)</button>
         <p class="msg" id="saveMsg"></p>
       </div>
     </aside>
@@ -234,8 +277,8 @@ const SAMPLE_MODEL = {"useVertexColours":false,"vertices":[[4,-188,1],[-2,-192,4
 const SAMPLE_NAME = "Local Player (1).json";
 
 const ANGLES = [
-  { deg: 0, name: "front" }, { deg: 45, name: "front-right" }, { deg: 90, name: "right" }, { deg: 135, name: "back-right" },
-  { deg: 180, name: "back" }, { deg: 225, name: "back-left" }, { deg: 270, name: "left" }, { deg: 315, name: "front-left" },
+  { deg: 0, name: "front" }, { deg: 45, name: "front-left" }, { deg: 90, name: "left" }, { deg: 135, name: "back-left" },
+  { deg: 180, name: "back" }, { deg: 225, name: "back-right" }, { deg: 270, name: "right" }, { deg: 315, name: "front-right" },
 ];
 // Light comes from the upper left, slightly in front of the camera (the game's own
 // player light direction, re-expressed relative to the viewer).
@@ -245,7 +288,7 @@ const SUPERSAMPLE = 2;
 const $ = (id) => document.getElementById(id);
 const state = {
   yaw: 0, tilt: 0, ambient: 0.55, contrast: 0.7, height: 600, pad: 8,
-  ticked: new Set(ANGLES.map((a) => a.deg)), modelName: SAMPLE_NAME,
+  ticked: new Set(ANGLES.map((a) => a.deg)), modelName: SAMPLE_NAME, frame: 0,
 };
 
 /* ---------- colour ---------- */
@@ -274,23 +317,21 @@ function parseModel(data) {
   const V = data.vertices, F = data.faces;
   if (!V.length || !F.length) throw new Error("This model is empty.");
   const nv = V.length, nf = F.length;
-  const pos = new Float32Array(nv * 3);
-  for (let i = 0; i < nv; i++) { // game axes (y down) to a right-handed y-up frame
-    pos[i * 3] = V[i][0]; pos[i * 3 + 1] = -V[i][1]; pos[i * 3 + 2] = -V[i][2];
-  }
-  // smooth vertex normals from face normals
-  const vn = new Float32Array(nv * 3);
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
   for (let f = 0; f < nf; f++) {
-    const [i0, i1, i2] = F[f];
-    if (i0 >= nv || i1 >= nv || i2 >= nv) throw new Error("A face points at a vertex that doesn't exist. The file may be cut off.");
-    a.fromArray(pos, i0 * 3); b.fromArray(pos, i1 * 3); c.fromArray(pos, i2 * 3);
-    n.subVectors(b, a).cross(c.sub(a)).normalize();
-    for (const vi of F[f]) { vn[vi * 3] += n.x; vn[vi * 3 + 1] += n.y; vn[vi * 3 + 2] += n.z; }
+    const t = F[f];
+    if (!Array.isArray(t) || t.length < 3 || t[0] >= nv || t[1] >= nv || t[2] >= nv) throw new Error("A face points at a vertex that doesn't exist. The file may be cut off.");
   }
-  for (let i = 0; i < nv; i++) {
-    n.fromArray(vn, i * 3); const L = n.length() || 1;
-    vn[i * 3] /= L; vn[i * 3 + 1] /= L; vn[i * 3 + 2] /= L;
+  const pos = toPositions(V);
+
+  // Animation: Creator's Kit can store whole-model snapshots with the client tick
+  // (20 ms) each one happens on. Without them the model has a single frame.
+  let frames = [pos], ticks = null;
+  const AV = data.animVertices;
+  if (Array.isArray(AV) && AV.length) {
+    if (!AV.every((fr) => Array.isArray(fr) && fr.length === nv)) throw new Error("The animation frames in this file don't match the model's vertex count, so they can't be played.");
+    frames = AV.map(toPositions);
+    const ct = data.clientTicks;
+    if (Array.isArray(ct) && ct.length === AV.length && ct.every(Number.isFinite)) ticks = ct.slice();
   }
 
   const useVC = !!data.useVertexColours && Array.isArray(data.vertexColours) && data.vertexColours.length;
@@ -315,9 +356,9 @@ function parseModel(data) {
   for (const bk of buckets.values()) {
     const m = bk.faces.length;
     const gp = new Float32Array(m * 9), gc = new Float32Array(m * 12);
-    bk.faces.forEach((f, k) => { F[f].forEach((vi, j) => { gp.set(pos.subarray(vi * 3, vi * 3 + 3), k * 9 + j * 3); }); });
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.BufferAttribute(gp, 3));
+    const posAttr = new THREE.BufferAttribute(gp, 3);
+    geo.setAttribute("position", posAttr);
     const colorAttr = new THREE.BufferAttribute(gc, 4);
     geo.setAttribute("color", colorAttr);
     const mat = new THREE.MeshBasicMaterial({
@@ -325,10 +366,55 @@ function parseModel(data) {
       polygonOffset: bk.p > 0, polygonOffsetFactor: -bk.p * 0.1, polygonOffsetUnits: -bk.p * 4,
     });
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.frustumCulled = false; // the camera is always framed to the model
     mesh.renderOrder = (bk.transparent ? 1000 : 0) + bk.p;
-    groups.push({ mesh, faces: bk.faces, cols: bk.cols, colorAttr });
+    groups.push({ mesh, faces: bk.faces, cols: bk.cols, colorAttr, posAttr });
   }
-  return { F, pos, vn, palette, groups, nv };
+  return { F, nv, nf, frames, ticks, normals: [], palette, groups, cur: -1 };
+}
+
+// game axes (y down) to a right-handed y-up frame
+function toPositions(V) {
+  const p = new Float32Array(V.length * 3);
+  for (let i = 0; i < V.length; i++) { p[i * 3] = V[i][0]; p[i * 3 + 1] = -V[i][1]; p[i * 3 + 2] = -V[i][2]; }
+  return p;
+}
+
+// smooth vertex normals for one frame, worked out on first use
+function normalsFor(i) {
+  if (model.normals[i]) return model.normals[i];
+  const pos = model.frames[i], F = model.F, nv = model.nv;
+  const vn = new Float32Array(nv * 3);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), n = new THREE.Vector3();
+  for (let f = 0; f < F.length; f++) {
+    const [i0, i1, i2] = F[f];
+    a.fromArray(pos, i0 * 3); b.fromArray(pos, i1 * 3); c.fromArray(pos, i2 * 3);
+    n.subVectors(b, a).cross(c.sub(a)).normalize();
+    vn[i0 * 3] += n.x; vn[i0 * 3 + 1] += n.y; vn[i0 * 3 + 2] += n.z;
+    vn[i1 * 3] += n.x; vn[i1 * 3 + 1] += n.y; vn[i1 * 3 + 2] += n.z;
+    vn[i2 * 3] += n.x; vn[i2 * 3 + 1] += n.y; vn[i2 * 3 + 2] += n.z;
+  }
+  for (let v = 0; v < nv; v++) {
+    n.fromArray(vn, v * 3); const L = n.length() || 1;
+    vn[v * 3] /= L; vn[v * 3 + 1] /= L; vn[v * 3 + 2] /= L;
+  }
+  return (model.normals[i] = vn);
+}
+
+// move the mesh to one frame of the animation
+function applyFrame(i) {
+  if (model.cur === i) return;
+  const pos = model.frames[i], F = model.F;
+  for (const g of model.groups) {
+    const arr = g.posAttr.array;
+    for (let k = 0; k < g.faces.length; k++) {
+      const t = F[g.faces[k]];
+      for (let j = 0; j < 3; j++) { const s = t[j] * 3, o = k * 9 + j * 3; arr[o] = pos[s]; arr[o + 1] = pos[s + 1]; arr[o + 2] = pos[s + 2]; }
+    }
+    g.posAttr.needsUpdate = true;
+    g.mesh.geometry.computeBoundingSphere();
+  }
+  model.cur = i;
 }
 
 function setModel(m, name) {
@@ -340,7 +426,67 @@ function setModel(m, name) {
   $("fileStatus").append("Loaded: ", b, name === SAMPLE_NAME ? " (example)" : "");
   baseHeight = null;
   stageFrame = null;
+  stopPlayback(); state.frame = 0; setupTimeline();
   requestDraw(); scheduleSheet();
+}
+
+/* ---------- timeline ---------- */
+const frameCount = () => (model ? model.frames.length : 1);
+const TICK_MS = 20;
+// how long a frame stays on screen: from the gap to the next keyframe's client tick,
+// or a steady 120 ms when frames came from separate files
+function frameMs(i) {
+  const tk = model && model.ticks;
+  if (tk && tk.length > 1) {
+    const next = i + 1 < tk.length ? tk[i + 1] : null;
+    const gap = next !== null ? next - tk[i] : tk[i] - tk[i - 1];
+    if (gap > 0) return gap * TICK_MS;
+  }
+  return 120;
+}
+function frameLabel(i) {
+  const n = frameCount(), tk = model && model.ticks;
+  return `frame ${i + 1} / ${n}` + (tk ? ` · tick ${tk[i] - tk[0]}` : "");
+}
+function setupTimeline() {
+  const n = frameCount(), animated = n > 1;
+  $("frame").max = String(n - 1); $("frame").value = "0";
+  $("frame").disabled = !animated; $("play").disabled = !animated; $("speed").disabled = !animated;
+  $("frameOut").textContent = frameLabel(0);
+  $("saveFrames").hidden = !animated;
+  $("animMsg").hidden = animated;
+  if (typeof updateButtons === "function") updateButtons();
+  const marks = $("tickMarks"); marks.innerHTML = "";
+  if (animated && n <= 120) {
+    for (let i = 0; i < n; i++) { const m = document.createElement("i"); m.style.left = `${(i / (n - 1)) * 100}%`; marks.append(m); }
+  }
+}
+function setFrame(i, fromPlayback) {
+  const n = frameCount();
+  state.frame = ((i % n) + n) % n;
+  $("frame").value = String(state.frame);
+  $("frameOut").textContent = frameLabel(state.frame);
+  requestDraw();
+  if (!fromPlayback) scheduleSheet();
+}
+let playing = false, playLast = 0, playAcc = 0;
+function playStep(now) {
+  if (!playing) return;
+  const speed = Number($("speed").value) || 1;
+  playAcc += (now - playLast) * speed; playLast = now;
+  let advanced = false;
+  while (playAcc >= frameMs(state.frame)) { playAcc -= frameMs(state.frame); state.frame = (state.frame + 1) % frameCount(); advanced = true; }
+  if (advanced) setFrame(state.frame, true);
+  requestAnimationFrame(playStep);
+}
+function startPlayback() {
+  if (frameCount() < 2) return;
+  playing = true; playAcc = 0; playLast = performance.now();
+  $("play").textContent = "Pause"; requestAnimationFrame(playStep);
+}
+function stopPlayback() {
+  const was = playing; playing = false; $("play").textContent = "Play";
+  if (was) scheduleSheet(); // refresh the contact sheet on the frame you stopped at
 }
 
 /* ---------- pose + lighting ---------- */
@@ -351,10 +497,11 @@ function poseMatrix(yawDeg, tiltDeg) {
   return rx.multiply(ry); // turn first, then tip toward the camera
 }
 
-function relight(yawDeg, tiltDeg) {
+function relight(yawDeg, tiltDeg, frame = state.frame) {
+  applyFrame(frame);
   rot.copy(poseMatrix(yawDeg, tiltDeg)); inv.copy(rot).invert();
   const L = LIGHT_VIEW.clone().transformDirection(inv); // light direction in model space
-  const { vn, palette, F } = model, amb = state.ambient, con = state.contrast;
+  const vn = normalsFor(frame), { palette, F } = model, amb = state.ambient, con = state.contrast;
   const lx = L.x, ly = L.y, lz = L.z;
   for (const g of model.groups) {
     const arr = g.colorAttr.array;
@@ -377,8 +524,8 @@ function relight(yawDeg, tiltDeg) {
 }
 
 // bounding box of the posed model in view space
-function posedBox(yawDeg, tiltDeg) {
-  const m = poseMatrix(yawDeg, tiltDeg), e = m.elements, p = model.pos;
+function posedBox(yawDeg, tiltDeg, frame = state.frame) {
+  const m = poseMatrix(yawDeg, tiltDeg), e = m.elements, p = model.frames[frame];
   let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
   for (let i = 0; i < model.nv; i++) {
     const x = p[i * 3], y = p[i * 3 + 1], z = p[i * 3 + 2];
@@ -417,8 +564,9 @@ let stageFrame = null; // fixed framing across all turns, so the model doesn't j
 function stageBox() {
   if (stageFrame && stageFrame.tilt === state.tilt) return stageFrame.box;
   let box = { x0: Infinity, x1: -Infinity, y0: Infinity, y1: -Infinity, z0: Infinity, z1: -Infinity };
-  for (let d = 0; d < 360; d += 15) {
-    const b = posedBox(d, state.tilt);
+  const nf = model.frames.length, step = Math.max(1, Math.ceil(nf / 24)); // sample long animations
+  for (let fr = 0; fr < nf; fr += step) for (let d = 0; d < 360; d += 15) {
+    const b = posedBox(d, state.tilt, fr);
     box = { x0: Math.min(box.x0, b.x0), x1: Math.max(box.x1, b.x1), y0: Math.min(box.y0, b.y0), y1: Math.max(box.y1, b.y1), z0: Math.min(box.z0, b.z0), z1: Math.max(box.z1, b.z1) };
   }
   stageFrame = { tilt: state.tilt, box };
@@ -445,19 +593,19 @@ new ResizeObserver(requestDraw).observe(stageEl);
 // pixels per model unit, fixed from the front view so every angle shares a scale
 let baseHeight = null;
 function unitScale(targetPx) {
-  if (baseHeight === null) { const b = posedBox(0, 0); baseHeight = b.y1 - b.y0; }
+  if (baseHeight === null) { const b = posedBox(0, 0, 0); baseHeight = b.y1 - b.y0; }
   return targetPx / baseHeight;
 }
 
 // Render one angle to a trimmed, transparent canvas.
-function renderAngle(yawDeg, targetPx, padPx) {
+function renderAngle(yawDeg, targetPx, padPx, frame = state.frame) {
   const scale = unitScale(targetPx);
-  const box = posedBox(yawDeg, state.tilt);
+  const box = posedBox(yawDeg, state.tilt, frame);
   const w = Math.max(1, Math.ceil((box.x1 - box.x0) * scale + padPx * 2));
   const h = Math.max(1, Math.ceil((box.y1 - box.y0) * scale + padPx * 2));
   const ss = Math.min(SUPERSAMPLE, Math.floor(4096 / Math.max(w, h)) || 1);
   offRenderer.setSize(w * ss, h * ss, false);
-  relight(yawDeg, state.tilt);
+  relight(yawDeg, state.tilt, frame);
   frameCamera(box, padPx / scale, w / h);
   offRenderer.render(scene, cam);
   const out = document.createElement("canvas"); out.width = w; out.height = h;
@@ -504,7 +652,7 @@ async function drawSheet() {
 function markCurrent() { for (const [deg, el] of frameEls) el.pic.classList.toggle("current", deg === state.yaw); }
 
 /* ---------- controls ---------- */
-function setYaw(d) { state.yaw = ((Math.round(d) % 360) + 360) % 360; $("yaw").value = state.yaw; $("yawOut").textContent = `${state.yaw}°`; syncPresets(); markCurrent(); requestDraw(); }
+function setYaw(d) { state.yaw = ((Math.round(d) % 360) + 360) % 360; $("yaw").value = state.yaw; $("yawOut").textContent = `${state.yaw}°`; syncPresets(); markCurrent(); updateButtons(); requestDraw(); }
 function syncPresets() { document.querySelectorAll("#yawPresets .chip").forEach((b) => b.setAttribute("aria-pressed", String(Number(b.dataset.deg) === state.yaw))); }
 for (const a of ANGLES) {
   const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.dataset.deg = a.deg; b.textContent = `${a.deg}°`;
@@ -530,36 +678,67 @@ const endDrag = () => { if (drag) { const tiltChanged = drag.tilt !== state.tilt
 stageEl.addEventListener("pointerup", endDrag); stageEl.addEventListener("pointercancel", endDrag);
 
 // loading files
-function loadText(text, name) {
+const readText = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = () => rej(new Error(`Couldn't read ${file.name}.`)); r.readAsText(file); });
+function parseJson(text, name) {
+  try { return JSON.parse(text); } catch { throw new Error(`${name} isn't valid JSON. Export it again from Creator's Kit and load the new file.`); }
+}
+// One file: a model, possibly with its own animation frames.
+// Several files: single-pose exports of the same model, played in file-name order.
+async function loadFiles(list) {
+  const files = Array.from(list || []).filter((f) => /\.json$/i.test(f.name) || f.type === "application/json");
   const msg = $("loadMsg");
+  if (!files.length) { msg.classList.add("err"); msg.textContent = "Those weren't .json files. Load the files Creator's Kit exports."; return; }
+  files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
   try {
-    let data; try { data = JSON.parse(text); } catch { throw new Error("This file isn't valid JSON. Export the model again from Creator's Kit and load the new file."); }
-    setModel(parseModel(data), name);
-    msg.classList.remove("err"); msg.textContent = `${data.vertices.length} vertices, ${data.faces.length} faces.`;
+    const datas = [];
+    for (const f of files) datas.push(parseJson(await readText(f), f.name));
+    const first = parseModel(datas[0]);
+    let name = files[0].name, note;
+    if (files.length > 1) {
+      const frames = [];
+      datas.forEach((d, k) => {
+        if (!Array.isArray(d.vertices) || d.vertices.length !== first.nv || !Array.isArray(d.faces) || d.faces.length !== first.nf) {
+          throw new Error(`${files[k].name} has a different vertex or face count from ${files[0].name}, so it isn't the same model. Export every frame from the same object.`);
+        }
+        frames.push(toPositions(d.vertices));
+      });
+      first.frames = frames; first.ticks = null; first.normals = [];
+      name = files[0].name.replace(/[_\- ]*\d+(\.json)$/i, "$1");
+      note = `${files.length} files loaded as frames, in this order: ${files.map((f) => f.name).join(", ")}.`;
+    } else {
+      note = `${first.nv} vertices, ${first.nf} faces` + (first.frames.length > 1 ? `, ${first.frames.length} animation frames.` : ". No animation frames in this file.");
+    }
+    setModel(first, name);
+    msg.classList.remove("err"); msg.textContent = note;
   } catch (err) { msg.classList.add("err"); msg.textContent = err.message; }
 }
-function loadFile(file) {
-  if (!file) return;
-  const r = new FileReader(); r.onload = () => loadText(String(r.result), file.name);
-  r.onerror = () => { $("loadMsg").classList.add("err"); $("loadMsg").textContent = "Couldn't read that file."; };
-  r.readAsText(file);
-}
-$("fileInput").addEventListener("change", (e) => { loadFile(e.target.files[0]); e.target.value = ""; });
+$("fileInput").addEventListener("change", (e) => { loadFiles(e.target.files); e.target.value = ""; });
+$("play").addEventListener("click", () => (playing ? stopPlayback() : startPlayback()));
+$("frame").addEventListener("input", (e) => { stopPlayback(); setFrame(Number(e.target.value)); });
+document.addEventListener("keydown", (e) => {
+  if (frameCount() < 2 || e.target.closest("input, select, textarea, button")) return;
+  if (e.key === ",") { stopPlayback(); setFrame(state.frame - 1); }
+  else if (e.key === ".") { stopPlayback(); setFrame(state.frame + 1); }
+});
 let dragDepth = 0;
 stageEl.addEventListener("dragenter", (e) => { e.preventDefault(); dragDepth++; $("dropVeil").hidden = false; });
 stageEl.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; $("dropVeil").hidden = true; } });
 stageEl.addEventListener("dragover", (e) => e.preventDefault());
-stageEl.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; $("dropVeil").hidden = true; loadFile(e.dataTransfer.files[0]); });
+stageEl.addEventListener("drop", (e) => { e.preventDefault(); dragDepth = 0; $("dropVeil").hidden = true; loadFiles(e.dataTransfer.files); });
 
 /* ---------- saving ---------- */
 let downloads = null, saveMode = "pending";
 const baseName = () => state.modelName.replace(/\.json$/i, "").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "_") || "model";
 const angleName = (deg) => { const a = ANGLES.find((x) => x.deg === deg); return a ? `${a.name}_${deg}` : `${deg}deg`; };
+const pad3 = (n) => String(n).padStart(3, "0");
+const frameTag = (i = state.frame) => (frameCount() > 1 ? `_f${pad3(i + 1)}` : "");
 function setSaveMsg(text, err) { const m = $("saveMsg"); m.textContent = text; m.classList.toggle("err", !!err); }
 function updateButtons() {
   $("saveAll").textContent = `Save ${state.ticked.size} ticked angle${state.ticked.size === 1 ? "" : "s"} (.zip)`;
   $("saveAll").disabled = saveMode !== "ready" || state.ticked.size === 0;
   $("saveOne").disabled = saveMode !== "ready";
+  $("saveFrames").textContent = `Save all ${frameCount()} frames at ${state.yaw}° (.zip)`;
+  $("saveFrames").disabled = saveMode !== "ready";
 }
 function saveDirect(filename, blob) {
   const url = URL.createObjectURL(blob);
@@ -581,7 +760,7 @@ async function offer(filename, data) {
 $("saveOne").addEventListener("click", async () => {
   if (!model) return;
   const blob = await toBlob(renderAngle(state.yaw, state.height, state.pad));
-  offer(`${baseName()}_${angleName(state.yaw)}.png`, blob);
+  offer(`${baseName()}_${angleName(state.yaw)}${frameTag()}.png`, blob);
 });
 $("saveAll").addEventListener("click", async () => {
   if (!model || !state.ticked.size) return;
@@ -589,9 +768,19 @@ $("saveAll").addEventListener("click", async () => {
   const zip = new JSZip();
   for (const a of ANGLES) {
     if (!state.ticked.has(a.deg)) continue;
-    zip.file(`${baseName()}_${a.name}_${a.deg}.png`, await toBlob(renderAngle(a.deg, state.height, state.pad)));
+    zip.file(`${baseName()}_${a.name}_${a.deg}${frameTag()}.png`, await toBlob(renderAngle(a.deg, state.height, state.pad)));
   }
-  offer(`${baseName()}_angles.zip`, await zip.generateAsync({ type: "blob" }));
+  offer(`${baseName()}${frameTag()}_angles.zip`, await zip.generateAsync({ type: "blob" }));
+});
+$("saveFrames").addEventListener("click", async () => {
+  if (!model || frameCount() < 2) return;
+  stopPlayback(); setSaveMsg("Rendering frames…");
+  const zip = new JSZip();
+  for (let i = 0; i < frameCount(); i++) {
+    zip.file(`${baseName()}_${angleName(state.yaw)}_f${pad3(i + 1)}.png`, await toBlob(renderAngle(state.yaw, state.height, state.pad, i)));
+  }
+  relight(state.yaw, state.tilt); requestDraw();
+  offer(`${baseName()}_${angleName(state.yaw)}_frames.zip`, await zip.generateAsync({ type: "blob" }));
 });
 function enterFallback() {
   saveMode = "fallback"; updateButtons();
