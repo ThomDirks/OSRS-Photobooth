@@ -133,6 +133,9 @@ select, .num {
 button:focus-visible, input:focus-visible, select:focus-visible, label.upload:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
 label.upload { display: block; }
 label.upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.gif-bg { display: flex; gap: 8px; align-items: center; }
+.gif-bg select { flex: 1; }
+.gif-bg input[type="color"] { width: 40px; height: 34px; padding: 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); cursor: pointer; }
 .msg { font-size: 13px; color: var(--muted); min-height: 1.5em; margin: 0; }
 .msg.err { color: #b3261e; }
 :root[data-theme="dark"] .msg.err { color: #f2b8b5; }
@@ -257,6 +260,40 @@ label.upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
         <button class="btn secondary" id="saveAll" type="button">Save ticked angles (.zip)</button>
         <button class="btn secondary" id="saveFrames" type="button" hidden>Save every frame at this angle (.zip)</button>
         <p class="msg" id="saveMsg"></p>
+      </div>
+
+      <div class="group">
+        <h2 class="group-title">GIF</h2>
+        <div class="field">
+          <label for="gifMotion">Motion</label>
+          <select id="gifMotion">
+            <option value="anim">The animation, at this angle</option>
+            <option value="spin">Turntable, one full turn</option>
+          </select>
+          <span class="note" id="gifMotionNote">Uses the playback speed you picked under the preview.</span>
+        </div>
+        <div class="field">
+          <label for="gifSize">Character height</label>
+          <select id="gifSize">
+            <option value="240">240 px</option>
+            <option value="360">360 px</option>
+            <option value="480" selected>480 px</option>
+            <option value="720">720 px</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="gifBg">Background</label>
+          <div class="gif-bg">
+            <select id="gifBg">
+              <option value="clear">Transparent</option>
+              <option value="color">Solid colour</option>
+            </select>
+            <input type="color" id="gifColor" value="#00b140" aria-label="Background colour" hidden>
+          </div>
+          <span class="note" id="gifBgNote">GIF transparency has hard edges. A solid colour (green for keying in Premiere) keeps them smooth.</span>
+        </div>
+        <button class="btn" id="saveGif" type="button">Save GIF</button>
+        <p class="msg" id="gifMsg"></p>
       </div>
     </aside>
   </div>
@@ -455,6 +492,9 @@ function setupTimeline() {
   $("frameOut").textContent = frameLabel(0);
   $("saveFrames").hidden = !animated;
   $("animMsg").hidden = animated;
+  $("gifMotion").querySelector('[value="anim"]').disabled = !animated;
+  $("gifMotion").value = animated ? "anim" : "spin";
+  if (typeof syncGifNotes === "function") syncGifNotes();
   if (typeof updateButtons === "function") updateButtons();
   const marks = $("tickMarks"); marks.innerHTML = "";
   if (animated && n <= 120) {
@@ -598,9 +638,9 @@ function unitScale(targetPx) {
 }
 
 // Render one angle to a trimmed, transparent canvas.
-function renderAngle(yawDeg, targetPx, padPx, frame = state.frame) {
+function renderAngle(yawDeg, targetPx, padPx, frame = state.frame, fixedBox = null) {
   const scale = unitScale(targetPx);
-  const box = posedBox(yawDeg, state.tilt, frame);
+  const box = fixedBox || posedBox(yawDeg, state.tilt, frame);
   const w = Math.max(1, Math.ceil((box.x1 - box.x0) * scale + padPx * 2));
   const h = Math.max(1, Math.ceil((box.y1 - box.y0) * scale + padPx * 2));
   const ss = Math.min(SUPERSAMPLE, Math.floor(4096 / Math.max(w, h)) || 1);
@@ -614,6 +654,16 @@ function renderAngle(yawDeg, targetPx, padPx, frame = state.frame) {
   relight(state.yaw, state.tilt); // restore the stage pose
   return out;
 }
+// one box around the model across several frames and turns, so a sequence never jumps
+function unionBox(yaws, frames) {
+  let b = null;
+  for (const fr of frames) for (const y of yaws) {
+    const p = posedBox(y, state.tilt, fr);
+    b = b ? { x0: Math.min(b.x0, p.x0), x1: Math.max(b.x1, p.x1), y0: Math.min(b.y0, p.y0), y1: Math.max(b.y1, p.y1), z0: Math.min(b.z0, p.z0), z1: Math.max(b.z1, p.z1) } : p;
+  }
+  return b;
+}
+const allFrames = () => [...Array(frameCount()).keys()];
 const toBlob = (canvas) => new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error("png"))), "image/png"));
 
 /* ---------- contact sheet ---------- */
@@ -775,13 +825,141 @@ $("saveAll").addEventListener("click", async () => {
 $("saveFrames").addEventListener("click", async () => {
   if (!model || frameCount() < 2) return;
   stopPlayback(); setSaveMsg("Rendering frames…");
-  const zip = new JSZip();
+  const zip = new JSZip(), box = unionBox([state.yaw], allFrames()); // same canvas size for every frame
   for (let i = 0; i < frameCount(); i++) {
-    zip.file(`${baseName()}_${angleName(state.yaw)}_f${pad3(i + 1)}.png`, await toBlob(renderAngle(state.yaw, state.height, state.pad, i)));
+    zip.file(`${baseName()}_${angleName(state.yaw)}_f${pad3(i + 1)}.png`, await toBlob(renderAngle(state.yaw, state.height, state.pad, i, box)));
   }
   relight(state.yaw, state.tilt); requestDraw();
   offer(`${baseName()}_${angleName(state.yaw)}_frames.zip`, await zip.generateAsync({ type: "blob" }));
 });
+/* ---------- GIF ---------- */
+// A small GIF89a encoder: one shared palette for the whole clip (median cut, no dithering,
+// which keeps the flat low-poly look), LZW-compressed frames, looping forever.
+function buildPalette(frames, maxColors) {
+  const total = frames.reduce((s, f) => s + f.data.length / 4, 0);
+  const stride = Math.max(1, Math.floor(total / 250000));
+  const px = [];
+  let n = 0;
+  for (const f of frames) {
+    const d = f.data;
+    for (let i = 0; i < d.length; i += 4, n++) if (n % stride === 0 && d[i + 3] >= 128) px.push((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
+  }
+  if (!px.length) px.push(0);
+  let boxes = [Uint32Array.from(px)];
+  const range = (a) => {
+    let r0 = 255, r1 = 0, g0 = 255, g1 = 0, b0 = 255, b1 = 0;
+    for (const c of a) { const r = c >> 16, g = (c >> 8) & 255, b = c & 255; if (r < r0) r0 = r; if (r > r1) r1 = r; if (g < g0) g0 = g; if (g > g1) g1 = g; if (b < b0) b0 = b; if (b > b1) b1 = b; }
+    return [r1 - r0, g1 - g0, b1 - b0];
+  };
+  while (boxes.length < maxColors) {
+    let bi = -1, best = 0, bestCh = 0;
+    boxes.forEach((bx, i) => { if (bx.length < 2) return; const rg = range(bx); const ch = rg.indexOf(Math.max(...rg)); const score = rg[ch] * Math.sqrt(bx.length); if (score > best) { best = score; bi = i; bestCh = ch; } });
+    if (bi < 0) break;
+    const shift = [16, 8, 0][bestCh], bx = boxes[bi];
+    const sorted = Array.from(bx).sort((a, b) => ((a >> shift) & 255) - ((b >> shift) & 255));
+    const mid = sorted.length >> 1;
+    boxes.splice(bi, 1, Uint32Array.from(sorted.slice(0, mid)), Uint32Array.from(sorted.slice(mid)));
+  }
+  return boxes.map((bx) => { let r = 0, g = 0, b = 0; for (const c of bx) { r += c >> 16; g += (c >> 8) & 255; b += c & 255; } const k = bx.length || 1; return [Math.round(r / k), Math.round(g / k), Math.round(b / k)]; });
+}
+function encodeGif(frames, delaysCs, transparent) {
+  const w = frames[0].width, h = frames[0].height;
+  const pal = buildPalette(frames, transparent ? 255 : 256);
+  while (pal.length < 256) pal.push([0, 0, 0]);
+  const TI = 255; // transparent index
+  const cache = new Int16Array(32768).fill(-1);
+  const nearest = (r, g, b) => {
+    const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+    if (cache[key] >= 0) return cache[key];
+    let bi = 0, bd = Infinity;
+    const lim = transparent ? 255 : 256;
+    for (let i = 0; i < lim; i++) { const p = pal[i], dr = p[0] - r, dg = p[1] - g, db = p[2] - b, dd = dr * dr * 2 + dg * dg * 4 + db * db * 3; if (dd < bd) { bd = dd; bi = i; } }
+    return (cache[key] = bi);
+  };
+  const out = [];
+  const byte = (b) => out.push(b & 255), word = (v) => { byte(v); byte(v >> 8); }, str = (s) => { for (const ch of s) byte(ch.charCodeAt(0)); };
+  str("GIF89a"); word(w); word(h); byte(0xf7); byte(0); byte(0);
+  for (const p of pal) { byte(p[0]); byte(p[1]); byte(p[2]); }
+  byte(0x21); byte(0xff); byte(11); str("NETSCAPE2.0"); byte(3); byte(1); word(0); byte(0); // loop forever
+  const idx = new Uint8Array(w * h);
+  frames.forEach((f, fi) => {
+    const d = f.data;
+    for (let i = 0, p = 0; p < idx.length; i += 4, p++) idx[p] = transparent && d[i + 3] < 128 ? TI : nearest(d[i], d[i + 1], d[i + 2]);
+    byte(0x21); byte(0xf9); byte(4); byte((2 << 2) | (transparent ? 1 : 0)); word(delaysCs[fi]); byte(transparent ? TI : 0); byte(0);
+    byte(0x2c); word(0); word(0); word(w); word(h); byte(0);
+    lzw(idx, out);
+  });
+  byte(0x3b);
+  return new Uint8Array(out);
+}
+function lzw(idx, out) {
+  const MIN = 8, CLEAR = 256, EOI = 257;
+  out.push(MIN);
+  let block = [], acc = 0, bits = 0;
+  const emitByte = (b) => { block.push(b); if (block.length === 255) { out.push(255, ...block); block = []; } };
+  let size = MIN + 1;
+  const emit = (code) => { acc |= code << bits; bits += size; while (bits >= 8) { emitByte(acc & 255); acc >>>= 8; bits -= 8; } };
+  let dict = new Map(), next = EOI + 1;
+  emit(CLEAR);
+  let prefix = idx[0];
+  for (let i = 1; i < idx.length; i++) {
+    const k = idx[i], key = (prefix << 8) | k, hit = dict.get(key);
+    if (hit !== undefined) { prefix = hit; continue; }
+    emit(prefix);
+    if (next < 4096) { dict.set(key, next++); if (next > (1 << size) && size < 12) size++; }
+    else { emit(CLEAR); dict = new Map(); next = EOI + 1; size = MIN + 1; }
+    prefix = k;
+  }
+  emit(prefix); emit(EOI);
+  if (bits > 0) emitByte(acc & 255);
+  if (block.length) out.push(block.length, ...block);
+  out.push(0);
+}
+function syncGifNotes() {
+  const spin = $("gifMotion").value === "spin", solid = $("gifBg").value === "color";
+  $("gifColor").hidden = !solid;
+  $("gifMotionNote").textContent = spin ? "One turn in about 4 seconds, at the tilt and frame you're on now." : "Uses the playback speed you picked under the preview.";
+  $("gifBgNote").textContent = solid ? "Pick the colour behind the GIF in your video, or green to key it out." : "GIF transparency has hard edges. A solid colour (green for keying in Premiere) keeps them smooth.";
+}
+["gifMotion", "gifBg"].forEach((id) => $(id).addEventListener("change", syncGifNotes));
+$("saveGif").addEventListener("click", async () => {
+  if (!model) return;
+  const msg = $("gifMsg"), btn = $("saveGif");
+  const spin = $("gifMotion").value === "spin" || frameCount() < 2;
+  const px = Number($("gifSize").value), pad = Math.round(state.pad * px / state.height) || 0;
+  const solid = $("gifBg").value === "color", color = $("gifColor").value;
+  stopPlayback(); btn.disabled = true; msg.classList.remove("err");
+  try {
+    const SPIN_STEPS = 40;
+    const yaws = spin ? [...Array(SPIN_STEPS).keys()].map((k) => state.yaw + (360 / SPIN_STEPS) * k) : [state.yaw];
+    const frames = spin ? [state.frame] : allFrames();
+    const box = unionBox(spin ? [...Array(24).keys()].map((k) => k * 15) : yaws, frames);
+    const shots = spin ? yaws.map((y) => [y, state.frame]) : frames.map((f) => [state.yaw, f]);
+    const speed = Number($("speed").value) || 1;
+    const images = [], delays = [];
+    for (let i = 0; i < shots.length; i++) {
+      msg.textContent = `Rendering frame ${i + 1} of ${shots.length}…`;
+      await new Promise((r) => setTimeout(r));
+      const c = renderAngle(shots[i][0], px, pad, shots[i][1], box);
+      const flat = document.createElement("canvas"); flat.width = c.width; flat.height = c.height;
+      const ctx = flat.getContext("2d");
+      if (solid) { ctx.fillStyle = color; ctx.fillRect(0, 0, c.width, c.height); }
+      ctx.drawImage(c, 0, 0);
+      images.push(ctx.getImageData(0, 0, c.width, c.height));
+      delays.push(spin ? 10 : Math.max(2, Math.round(frameMs(shots[i][1]) / speed / 10)));
+    }
+    msg.textContent = "Encoding the GIF…";
+    await new Promise((r) => setTimeout(r));
+    const gif = encodeGif(images, delays, !solid);
+    relight(state.yaw, state.tilt); requestDraw();
+    const name = `${baseName()}_${spin ? `turntable_tilt${state.tilt}` : angleName(state.yaw)}.gif`;
+    msg.textContent = `${images[0].width} × ${images[0].height} px, ${shots.length} frames, ${(gif.length / 1048576).toFixed(1)} MB.`;
+    await offer(name, new Blob([gif], { type: "image/gif" }));
+  } catch (err) {
+    msg.classList.add("err"); msg.textContent = "Couldn't make the GIF. Try a smaller height.";
+  } finally { btn.disabled = false; }
+});
+
 function enterFallback() {
   saveMode = "fallback"; updateButtons();
   setSaveMsg("Saving files isn't available in this view. The contact sheet below shows full-size images: right-click one and choose Save image.");
